@@ -1,43 +1,18 @@
 # Database Schema
 
-```mermaid
-erDiagram
-    USERS {
-        INT id PK
-        VARCHAR username UK
-        VARCHAR email UK
-        VARCHAR password_hash
-        TIMESTAMP created_at
-    }
+## Nura Authentication System
 
-    MONGODB_PROFILES {
-        INT user_id
-        STRING fullName
-        INT age
-        STRING bio
-        STRING interests
-        DATETIME updated_at
-    }
+The application uses three data storage systems:
 
-    USERS ||--o| MONGODB_PROFILES : "user_id"
-```
+- MySQL — authentication and account information
+- MongoDB — additional user profile information
+- Redis — temporary authentication sessions
 
-## MySQL
+---
 
-The `users` table stores authentication data:
-- `username`
-- `email`
-- `password_hash`
-- timestamps
+## MySQL Database
 
-## MongoDB
+### Database
 
-The `profiles` collection stores additional profile information:
-- `user_id`
-- `fullName`
-- `age`
-- `bio`
-- `interests`
-- `updated_at`
-
-Redis stores the login session temporarily using a SHA-256-derived session key.
+```text
+nura_auth

@@ -1,6 +1,8 @@
 <?php
 
-header('Content-Type: application/json');
+declare(strict_types=1);
+
+header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -8,80 +10,124 @@ use Dotenv\Dotenv;
 use Predis\Client;
 use MongoDB\Client as MongoClient;
 
-try {
-    // Load environment variables
-    $dotenv = Dotenv::createImmutable(__DIR__ . '/../');
-    $dotenv->load();
+function respond(
+    bool $success,
+    string $message = '',
+    array $extra = [],
+    int $status = 200
+): never {
 
-    // MySQL connection
-    $pdo = new PDO(
-        'mysql:host=localhost;dbname=nura_auth;charset=utf8mb4',
-        'root',
-        ''
+    http_response_code($status);
+
+    echo json_encode(
+        array_merge(
+            [
+                'success' => $success,
+                'message' => $message
+            ],
+            $extra
+        )
     );
 
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    exit;
+}
+
+try {
+
+    // Load .env locally.
+    // Render provides environment variables automatically.
+    $envFile = __DIR__ . '/../.env';
+
+    if (file_exists($envFile)) {
+        $dotenv = Dotenv::createImmutable(__DIR__ . '/../');
+        $dotenv->safeLoad();
+    }
+
+    // MySQL configuration
+    $host = $_ENV['MYSQL_HOST'] ?? getenv('MYSQL_HOST') ?: 'localhost';
+    $port = $_ENV['MYSQL_PORT'] ?? getenv('MYSQL_PORT') ?: '3306';
+    $database = $_ENV['MYSQL_DATABASE'] ?? getenv('MYSQL_DATABASE') ?: 'nura_auth';
+    $username = $_ENV['MYSQL_USER'] ?? getenv('MYSQL_USER') ?: 'root';
+    $password = $_ENV['MYSQL_PASSWORD'] ?? getenv('MYSQL_PASSWORD') ?: '';
+
+    $dsn = "mysql:host={$host};port={$port};dbname={$database};charset=utf8mb4";
+
+    $options = [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false
+    ];
+
+    // Aiven MySQL SSL
+    $sslCa = $_ENV['MYSQL_SSL_CA'] ?? getenv('MYSQL_SSL_CA') ?: '';
+
+    if ($sslCa !== '' && file_exists($sslCa)) {
+        $options[PDO::MYSQL_ATTR_SSL_CA] = $sslCa;
+        $options[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = true;
+    }
+
+    $pdo = new PDO(
+        $dsn,
+        $username,
+        $password,
+        $options
+    );
 
     // Redis connection
     $redis = new Client([
-        'scheme'   => 'redis',
-        'host'     => $_ENV['REDIS_HOST'],
-        'port'     => (int) $_ENV['REDIS_PORT'],
+        'scheme' => $_ENV['REDIS_SCHEME'] ?? 'redis',
+        'host' => $_ENV['REDIS_HOST'],
+        'port' => (int) $_ENV['REDIS_PORT'],
+        'username' => $_ENV['REDIS_USERNAME'] ?? 'default',
         'password' => $_ENV['REDIS_PASSWORD']
     ]);
 
-    $redis->connect();
-
-    // Get authentication token
+    // Authenticate using Redis session
     $token = $_COOKIE['auth_token'] ?? '';
 
     if ($token === '') {
-        echo json_encode([
-            'success' => false,
-            'message' => 'Please login first.'
-        ]);
-        exit;
+        respond(false, 'Please login first.', [], 401);
     }
 
-    // Find session in Redis
     $sessionKey = 'session:' . hash('sha256', $token);
+
     $sessionData = $redis->get($sessionKey);
 
     if (!$sessionData) {
-        echo json_encode([
-            'success' => false,
-            'message' => 'Session expired. Please login again.'
-        ]);
-        exit;
+        respond(
+            false,
+            'Session expired. Please login again.',
+            [],
+            401
+        );
     }
 
     $session = json_decode($sessionData, true);
 
-    if (!$session || empty($session['user_id'])) {
-        echo json_encode([
-            'success' => false,
-            'message' => 'Invalid session.'
-        ]);
-        exit;
+    if (
+        !is_array($session) ||
+        empty($session['user_id'])
+    ) {
+        respond(false, 'Invalid session.', [], 401);
     }
 
     $userId = (int) $session['user_id'];
 
     // MongoDB connection
     $mongoClient = new MongoClient($_ENV['MONGODB_URI']);
-    $database = $mongoClient->selectDatabase($_ENV['MONGODB_DATABASE']);
 
-    $profilesCollection = $database->profiles;
+    $databaseMongo = $mongoClient->selectDatabase(
+        $_ENV['MONGODB_DATABASE']
+    );
 
-    /*
-    |--------------------------------------------------------------------------
-    | GET - Load profile
-    |--------------------------------------------------------------------------
-    */
+    $profilesCollection = $databaseMongo->profiles;
+
+    // ----------------------------------------
+    // GET - Load profile
+    // ----------------------------------------
 
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
-        // Get user from MySQL
         $stmt = $pdo->prepare(
             'SELECT id, username, email
              FROM users
@@ -93,24 +139,20 @@ try {
             ':id' => $userId
         ]);
 
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $user = $stmt->fetch();
 
         if (!$user) {
-            echo json_encode([
-                'success' => false,
-                'message' => 'User not found.'
-            ]);
-            exit;
+            respond(false, 'User not found.', [], 404);
         }
 
-        // Get additional profile information from MongoDB
         $profile = $profilesCollection->findOne([
             'user_id' => $userId
         ]);
 
         $profileData = null;
 
-        if ($profile) {
+        if ($profile !== null) {
+
             $profileData = [
                 'fullName' => $profile['fullName'] ?? '',
                 'age' => $profile['age'] ?? '',
@@ -119,128 +161,151 @@ try {
             ];
         }
 
-        echo json_encode([
-            'success' => true,
-            'user' => [
-                'username' => $user['username'],
-                'email' => $user['email']
-            ],
-            'profile' => $profileData
-        ]);
-
-        exit;
+        respond(
+            true,
+            '',
+            [
+                'user' => [
+                    'username' => $user['username'],
+                    'email' => $user['email']
+                ],
+                'profile' => $profileData
+            ]
+        );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | POST - Logout
-    |--------------------------------------------------------------------------
-    */
+    // ----------------------------------------
+    // Only POST allowed below
+    // ----------------------------------------
 
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        respond(false, 'Invalid request method.', [], 405);
+    }
 
-        $action = $_POST['action'] ?? '';
+    $action = $_POST['action'] ?? '';
 
-        if ($action === 'logout') {
+    // ----------------------------------------
+    // POST - Logout
+    // ----------------------------------------
 
-            // Delete Redis session
-            $redis->del([$sessionKey]);
+    if ($action === 'logout') {
 
-            // Remove authentication cookie
-            setcookie('auth_token', '', [
-                'expires' => time() - 3600,
-                'path' => '/',
-                'secure' => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'),
-                'httponly' => true,
-                'samesite' => 'Lax'
-            ]);
+        $redis->del([$sessionKey]);
 
-            echo json_encode([
-                'success' => true,
-                'message' => 'Logged out successfully.'
-            ]);
-
-            exit;
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | POST - Update profile
-        |--------------------------------------------------------------------------
-        */
-
-        $fullName = trim($_POST['fullName'] ?? '');
-        $age = trim($_POST['age'] ?? '');
-        $bio = trim($_POST['bio'] ?? '');
-        $interests = trim($_POST['interests'] ?? '');
-
-        // Validate full name
-        if ($fullName === '') {
-            echo json_encode([
-                'success' => false,
-                'message' => 'Full name is required.'
-            ]);
-            exit;
-        }
-
-        // Validate age
-        if ($age !== '') {
-
-            if (!filter_var($age, FILTER_VALIDATE_INT)) {
-                echo json_encode([
-                    'success' => false,
-                    'message' => 'Age must be a valid number.'
-                ]);
-                exit;
-            }
-
-            $age = (int) $age;
-
-            if ($age < 1 || $age > 120) {
-                echo json_encode([
-                    'success' => false,
-                    'message' => 'Age must be between 1 and 120.'
-                ]);
-                exit;
-            }
-        } else {
-            $age = null;
-        }
-
-        // Save/update profile in MongoDB
-        $profilesCollection->updateOne(
-            ['user_id' => $userId],
-            [
-                '$set' => [
-                    'user_id' => $userId,
-                    'fullName' => $fullName,
-                    'age' => $age,
-                    'bio' => $bio,
-                    'interests' => $interests,
-                    'updated_at' => new MongoDB\BSON\UTCDateTime()
-                ]
-            ],
-            ['upsert' => true]
+        $secure = (
+            !empty($_SERVER['HTTPS']) &&
+            $_SERVER['HTTPS'] !== 'off'
         );
 
-        echo json_encode([
-            'success' => true,
-            'message' => 'Profile updated successfully.'
+        setcookie('auth_token', '', [
+            'expires' => time() - 3600,
+            'path' => '/',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => 'Lax'
         ]);
 
-        exit;
+        respond(
+            true,
+            'Logged out successfully.'
+        );
     }
 
-    echo json_encode([
-        'success' => false,
-        'message' => 'Invalid request method.'
-    ]);
+    // ----------------------------------------
+    // POST - Update profile
+    // ----------------------------------------
 
-} catch (Exception $e) {
+    $fullName = trim((string) ($_POST['fullName'] ?? ''));
+    $ageInput = trim((string) ($_POST['age'] ?? ''));
+    $bio = trim((string) ($_POST['bio'] ?? ''));
+    $interests = trim((string) ($_POST['interests'] ?? ''));
 
-    // Temporary debugging message
-    echo json_encode([
-        'success' => false,
-        'message' => $e->getMessage()
-    ]);
+    if (
+        $fullName === '' ||
+        strlen($fullName) > 100
+    ) {
+        respond(
+            false,
+            'Full name is required and must be at most 100 characters.',
+            [],
+            422
+        );
+    }
+
+    if ($ageInput !== '') {
+
+        if (!ctype_digit($ageInput)) {
+            respond(
+                false,
+                'Age must be a valid number.',
+                [],
+                422
+            );
+        }
+
+        $age = (int) $ageInput;
+
+        if ($age < 1 || $age > 120) {
+            respond(
+                false,
+                'Age must be between 1 and 120.',
+                [],
+                422
+            );
+        }
+
+    } else {
+
+        $age = null;
+    }
+
+    if (strlen($bio) > 500) {
+        respond(
+            false,
+            'Bio must be at most 500 characters.',
+            [],
+            422
+        );
+    }
+
+    if (strlen($interests) > 255) {
+        respond(
+            false,
+            'Interests must be at most 255 characters.',
+            [],
+            422
+        );
+    }
+
+    // Save profile in MongoDB
+    $profilesCollection->updateOne(
+        ['user_id' => $userId],
+        [
+            '$set' => [
+                'user_id' => $userId,
+                'fullName' => $fullName,
+                'age' => $age,
+                'bio' => $bio,
+                'interests' => $interests,
+                'updated_at' => new MongoDB\BSON\UTCDateTime()
+            ]
+        ],
+        ['upsert' => true]
+    );
+
+    respond(
+        true,
+        'Profile updated successfully.'
+    );
+
+} catch (Throwable $e) {
+
+    error_log($e->getMessage());
+
+    respond(
+        false,
+        'Profile service is temporarily unavailable.',
+        [],
+        500
+    );
 }

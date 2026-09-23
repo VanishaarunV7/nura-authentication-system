@@ -99,11 +99,11 @@ try {
 
     // Redis Cloud connection
     $redis = new Client([
-        'scheme' => $_ENV['REDIS_SCHEME'] ?? 'redis',
-        'host' => $_ENV['REDIS_HOST'],
-        'port' => (int) $_ENV['REDIS_PORT'],
-        'username' => $_ENV['REDIS_USERNAME'] ?? 'default',
-        'password' => $_ENV['REDIS_PASSWORD']
+        'scheme' => $_ENV['REDIS_SCHEME'] ?? getenv('REDIS_SCHEME') ?: 'redis',
+        'host' => $_ENV['REDIS_HOST'] ?? getenv('REDIS_HOST') ?: '',
+        'port' => (int) ($_ENV['REDIS_PORT'] ?? getenv('REDIS_PORT') ?: 6379),
+        'username' => $_ENV['REDIS_USERNAME'] ?? getenv('REDIS_USERNAME') ?: 'default',
+        'password' => $_ENV['REDIS_PASSWORD'] ?? getenv('REDIS_PASSWORD') ?: ''
     ]);
 
     // Generate secure token

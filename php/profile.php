@@ -43,7 +43,10 @@ try {
         $dotenv->safeLoad();
     }
 
+    // =========================================================
     // MySQL configuration
+    // =========================================================
+
     $host = $_ENV['MYSQL_HOST'] ?? getenv('MYSQL_HOST') ?: 'localhost';
     $port = $_ENV['MYSQL_PORT'] ?? getenv('MYSQL_PORT') ?: '3306';
     $database = $_ENV['MYSQL_DATABASE'] ?? getenv('MYSQL_DATABASE') ?: 'nura_auth';
@@ -73,16 +76,22 @@ try {
         $options
     );
 
+    // =========================================================
     // Redis connection
+    // =========================================================
+
     $redis = new Client([
-        'scheme' => $_ENV['REDIS_SCHEME'] ?? 'redis',
-        'host' => $_ENV['REDIS_HOST'],
-        'port' => (int) $_ENV['REDIS_PORT'],
-        'username' => $_ENV['REDIS_USERNAME'] ?? 'default',
-        'password' => $_ENV['REDIS_PASSWORD']
+        'scheme'   => $_ENV['REDIS_SCHEME'] ?? getenv('REDIS_SCHEME') ?: 'redis',
+        'host'     => $_ENV['REDIS_HOST'] ?? getenv('REDIS_HOST') ?: '',
+        'port'     => (int) ($_ENV['REDIS_PORT'] ?? getenv('REDIS_PORT') ?: 6379),
+        'username' => $_ENV['REDIS_USERNAME'] ?? getenv('REDIS_USERNAME') ?: 'default',
+        'password' => $_ENV['REDIS_PASSWORD'] ?? getenv('REDIS_PASSWORD') ?: ''
     ]);
 
+    // =========================================================
     // Authenticate using Redis session
+    // =========================================================
+
     $token = $_COOKIE['auth_token'] ?? '';
 
     if ($token === '') {
@@ -113,18 +122,24 @@ try {
 
     $userId = (int) $session['user_id'];
 
+    // =========================================================
     // MongoDB connection
-    $mongoClient = new MongoClient($_ENV['MONGODB_URI']);
+    // =========================================================
+
+    $mongoUri = $_ENV['MONGODB_URI'] ?? getenv('MONGODB_URI') ?: '';
+    $mongoDatabase = $_ENV['MONGODB_DATABASE'] ?? getenv('MONGODB_DATABASE') ?: '';
+
+    $mongoClient = new MongoClient($mongoUri);
 
     $databaseMongo = $mongoClient->selectDatabase(
-        $_ENV['MONGODB_DATABASE']
+        $mongoDatabase
     );
 
     $profilesCollection = $databaseMongo->profiles;
 
-    // ----------------------------------------
+    // =========================================================
     // GET - Load profile
-    // ----------------------------------------
+    // =========================================================
 
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
@@ -174,9 +189,9 @@ try {
         );
     }
 
-    // ----------------------------------------
+    // =========================================================
     // Only POST allowed below
-    // ----------------------------------------
+    // =========================================================
 
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         respond(false, 'Invalid request method.', [], 405);
@@ -184,9 +199,9 @@ try {
 
     $action = $_POST['action'] ?? '';
 
-    // ----------------------------------------
+    // =========================================================
     // POST - Logout
-    // ----------------------------------------
+    // =========================================================
 
     if ($action === 'logout') {
 
@@ -211,9 +226,9 @@ try {
         );
     }
 
-    // ----------------------------------------
+    // =========================================================
     // POST - Update profile
-    // ----------------------------------------
+    // =========================================================
 
     $fullName = trim((string) ($_POST['fullName'] ?? ''));
     $ageInput = trim((string) ($_POST['age'] ?? ''));
@@ -277,7 +292,10 @@ try {
         );
     }
 
+    // =========================================================
     // Save profile in MongoDB
+    // =========================================================
+
     $profilesCollection->updateOne(
         ['user_id' => $userId],
         [
